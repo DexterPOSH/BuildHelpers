@@ -15,7 +15,7 @@
         BHBuildNumber      via Get-BuildVariables
         BHProjectName      via Get-ProjectName
         BHPSModuleManifest via Get-PSModuleManifest
-        BHPSModulePath     via Split-Path on BHPSModuleManifest
+        BHModulePath     via Split-Path on BHPSModuleManifest
 
 .PARAMETER Path
     Path to project root. Defaults to the current working path
@@ -29,6 +29,9 @@
 
     The scope value Script may only be used with dot-sourced Set-BuildVariable.
 
+.PARAMETER VariableNamePrefix
+    Allow to set a custom Prefix to the Environment variable created. The default is BH such as $BHProjectPath
+
 .NOTES
     We assume you are in the project root, for several of the fallback options
 
@@ -41,6 +44,12 @@
 .EXAMPLE
     . Set-BuildVariable -Scope Script
     Get-Variable BH* -Scope Script
+
+    # Set build variables in the script scope (mind the .), read them
+
+.EXAMPLE
+    . Set-BuildVariable -VariableNamePrefix BUILD
+    Get-Variable BUILD*
 
     # Set build variables in the script scope (mind the .), read them
 
@@ -68,7 +77,11 @@ param(
         $true
     })]
     [string]
-    $Scope
+    $Scope,
+
+    [ValidatePattern('\w*')]
+    [String]
+    $VariableNamePrefix = 'BH'
 )
 
 if($MyInvocation.InvocationName -eq '.')
@@ -93,12 +106,16 @@ else
 ${Build.Vars} = Get-BuildVariables -Path $Path
 ${Build.ProjectName} = Get-ProjectName -Path $Path
 ${Build.ManifestPath} = Get-PSModuleManifest -Path $Path
-
-Set-Variable -Scope $Scope -Name BHBuildSystem -Value ${Build.Vars}.BuildSystem
-Set-Variable -Scope $Scope -Name BHProjectPath -Value ${Build.Vars}.ProjectPath
-Set-Variable -Scope $Scope -Name BHBranchName -Value ${Build.Vars}.BranchName
-Set-Variable -Scope $Scope -Name BHCommitMessage -Value ${Build.Vars}.CommitMessage
-Set-Variable -Scope $Scope -Name BHBuildNumber -Value ${Build.Vars}.BuildNumber
-Set-Variable -Scope $Scope -Name BHProjectName -Value ${Build.ProjectName}
-Set-Variable -Scope $Scope -Name BHPSModuleManifest -Value ${Build.ManifestPath}
-Set-Variable -Scope $Scope -Name BHPSModulePath -Value $(Split-Path -Path ${Build.ManifestPath} -Parent)
+$BuildHelpersVariables = @{
+    BuildSystem = ${Build.Vars}.BuildSystem
+    ProjectPath = ${Build.Vars}.ProjectPath
+    BranchName  = ${Build.Vars}.BranchName
+    CommitMessage = ${Build.Vars}.CommitMessage
+    BuildNumber = ${Build.Vars}.BuildNumber
+    ProjectName = ${Build.ProjectName}
+    PSModuleManifest = ${Build.ManifestPath}
+    ModulePath = $(Split-Path -Path ${Build.ManifestPath} -Parent)
+}
+foreach ($VarName in $BuildHelpersVariables.Keys) {
+    Set-Variable -Scope $Scope -Name ('{0}{1}' -f $VariableNamePrefix,$VarName) -Value $BuildHelpersVariables[$VarName]
+}

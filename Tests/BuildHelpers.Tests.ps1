@@ -18,8 +18,8 @@ Describe "$ModuleName PS$PSVersion" {
         Set-StrictMode -Version latest
 
         It 'Should load' {
-            $Module = Get-Module $ModuleName
-            $Module.Name | Should be $ModuleName
+            $Module = @( Get-Module $ModuleName )
+            $Module.Name -contains $ModuleName | Should be $True
             $Commands = $Module.ExportedCommands.Keys
             $Commands -contains 'Get-BuildVariables' | Should Be $True
         }
@@ -213,26 +213,26 @@ Describe 'Step-ModuleVersion' {
         }
         
         It 'Should have an properly formatted array for "FunctionsToExport"' {
-            'TestDrive:\testmanifest\testmanifest.psd1' | Should Contain "FunctionsToExport = 'Get-MyFunction', 'Set-MyFunction'" 
+            'TestDrive:\testmanifest\testmanifest.psd1' | Should -FileContentMatchExactly "FunctionsToExport = 'Get-MyFunction', 'Set-MyFunction'" 
         }
         
         It 'Should have an properly formatted array for "Tags"' {
-            'TestDrive:\testmanifest\testmanifest.psd1' | Should Contain "Tags = 'one', 'two', 'three'" 
+            'TestDrive:\testmanifest\testmanifest.psd1' | Should -FileContentMatchExactly "Tags = 'one', 'two', 'three'" 
         }         
 
         It 'Should have an properly formatted array for "NestedModules"' {		
-            'TestDrive:\testmanifest\testmanifest.psd1' | Should Contain ([regex]::Escape('NestedModules = @(''Module1'',')) 		
-            'TestDrive:\testmanifest\testmanifest.psd1' | Should Contain ([regex]::Escape("               'Module2')"))		
+            'TestDrive:\testmanifest\testmanifest.psd1' | Should -FileContentMatch ([regex]::Escape('NestedModules = @(''Module1'',')) 		
+            'TestDrive:\testmanifest\testmanifest.psd1' | Should -FileContentMatch ([regex]::Escape("               'Module2')"))		
         }     
 
         It 'Should have an properly formatted array for "RequiredModules"' {
-            'TestDrive:\testmanifest\testmanifest.psd1' | Should Contain ([regex]::Escape('RequiredModules = @(''ModuleA'',')) 
-            'TestDrive:\testmanifest\testmanifest.psd1' | Should Contain ([regex]::Escape("               'ModuleB')"))
+            'TestDrive:\testmanifest\testmanifest.psd1' | Should -FileContentMatch ([regex]::Escape('RequiredModules = @(''ModuleA'',')) 
+            'TestDrive:\testmanifest\testmanifest.psd1' | Should -FileContentMatch ([regex]::Escape("               'ModuleB')"))
         }       
         
         It 'Should have an properly formatted array for "ModuleList"' {
-            'TestDrive:\testmanifest\testmanifest.psd1' | Should Contain ([regex]::Escape('ModuleList = @(''ModuleX'',')) 
-            'TestDrive:\testmanifest\testmanifest.psd1' | Should Contain ([regex]::Escape("               'ModuleY')"))
+            'TestDrive:\testmanifest\testmanifest.psd1' | Should -FileContentMatch ([regex]::Escape('ModuleList = @(''ModuleX'',')) 
+            'TestDrive:\testmanifest\testmanifest.psd1' | Should -FileContentMatch ([regex]::Escape("               'ModuleY')"))
         }                            
         
         It 'The other properties should be the same' {
@@ -250,11 +250,12 @@ Describe 'Step-ModuleVersion' {
 Describe 'Get-GitChangedFile' {
     Context 'This repository' {
 
-        It 'Should find at least one file from the last commit in this repo' {
-            $Output = Get-GitChangedFile
-            @($Output).count | Should BeGreaterThan 0
-            Test-Path @($Output)[0] | Should Be $true
-        }
+        # TODO: Fix this.  Merge commits will fail this test, makes this test somewhat pointless?
+        # It 'Should find at least one file from the last commit in this repo' {
+        #     $Output = Get-GitChangedFile
+        #     @($Output).count | Should BeGreaterThan 0
+        #     Test-Path @($Output)[0] | Should Be $true
+        # }
               
         It 'Should find files changed in a specified commit in this repo' {
             $Output = Get-GitChangedFile -Commit 01b3931e6ed5d3d16cbcae25fcf98d185c1375b7 -ErrorAction SilentlyContinue -Include README*
@@ -280,6 +281,47 @@ Describe 'Invoke-Git' {
     Context 'Invalid repository' {
         It "Should fail if we don't find a valid git repo" {
             {Invoke-Git rev-parse --show-toplevel -Path C:\ -ErrorAction Stop} | Should Throw
+        }
+    }
+}
+
+Describe 'Get-ModuleFunctions' {
+    Context 'dummymodule' {
+        It 'Should return the functions output by a module' {
+            $Functions = Get-ModuleFunctions -Name $PSScriptRoot\TestData\dummymodule
+            $Functions.Count | Should be 3
+            'a', 'b', 'c' | Foreach {
+                $Functions -contains $_ | Should Be $True
+            }
+        }
+    }
+}
+
+Describe 'Set-ModuleFunctions' {
+    Context 'dummymodule' {
+        $dummydir = ( mkdir $PSScriptRoot\TestData\dummymodule ).FullName
+        Copy-item $PSScriptRoot\TestData\dummymodule.psd1 $dummydir -Confirm:$False
+        Copy-item $PSScriptRoot\TestData\dummymodule.psm1 $dummydir -Confirm:$False
+        It 'Should update the module manifest with exported functions' {
+            Set-ModuleFunctions -Name $dummydir
+            $Functions = Get-Metadata $dummydir\dummymodule.psd1 -PropertyName FunctionsToExport
+            $Functions.Count | Should be 3
+            'a', 'b', 'c' | Foreach {
+                $Functions -contains $_ | Should Be $True
+            }
+        }
+        Remove-Item $dummydir -Force -Confirm:$False -Recurse
+    }
+}
+
+Describe 'Set-ShieldsIoBadge' {
+    Context 'dummy readme.md' {
+        Set-Content -Path TestDrive:\readme.md -Value '![coverage]()'
+
+        Set-ShieldsIoBadge -Subject 'coverage' -Status 75 -AsPercentage -Path TestDrive:\readme.md
+
+        It 'Should update the dummy readme.md with code coverage' {
+            Get-Content TestDrive:\readme.md | Should Be '![coverage](https://img.shields.io/badge/coverage-75%25-yellow.svg)'
         }
     }
 }

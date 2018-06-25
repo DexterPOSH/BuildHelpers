@@ -1,10 +1,10 @@
 @{
 
 # Script module or binary module file associated with this manifest.
-RootModule = 'BuildHelpers.psm1'
+RootModule = 'dummymodule.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.1.0'
+ModuleVersion = '0.0.28'
 
 # ID used to uniquely identify this module
 GUID = 'ec079170-28b7-40b4-aaae-f8ebf76850ab'
@@ -67,7 +67,7 @@ CmdletsToExport = '*'
 VariablesToExport = '*'
 
 # Aliases to export from this module
-AliasesToExport = 'Set-BuildVariable'
+#AliasesToExport = 'Set-BuildVariable'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

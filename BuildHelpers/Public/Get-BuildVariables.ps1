@@ -19,11 +19,14 @@ function Get-BuildVariables {
                 Jenkins
                 Teamcity
                 VTFS
+                Bamboo
+                GoCD
+                Travis CI
 
-            For Teamcity the VCS Checkout Mode needs to be to checkout files on agent. 
+            For Teamcity the VCS Checkout Mode needs to be to checkout files on agent.
             Since TeamCity 10.0, this is the default setting for the newly created build configurations.
-            
-            Git needs to be available on the agent for this.  
+
+            Git needs to be available on the agent for this.
 
             Produces:
                 BuildSystem: Build system we're running under
@@ -34,6 +37,9 @@ function Get-BuildVariables {
 
     .PARAMETER Path
         Path to project root. Defaults to the current working path
+
+    .PARAMETER GitPath
+        Path to git.  Defaults to git (i.e. git is in $ENV:PATH)
 
     .NOTES
         We assume you are in the project root, for several of the fallback options
@@ -55,35 +61,59 @@ function Get-BuildVariables {
     #>
     [cmdletbinding()]
     param(
-        $Path = $PWD.Path
+        $Path = $PWD.Path,
+        [validatescript({
+            if(-not (Get-Command $_ -ErrorAction SilentlyContinue))
+            {
+                throw "Could not find command at GitPath [$_]"
+            }
+            $true
+        })]
+        $GitPath = 'git'
     )
 
-$Environment = Get-Item ENV:
-$IsGitRepo = Test-Path $( Join-Path $Path .git )
+    $Path = ( Resolve-Path $Path ).Path
+    $Environment = Get-Item ENV:
+    if(!$PSboundParameters.ContainsKey('GitPath')) {
+        $GitPath = (Get-Command $GitPath -ErrorAction SilentlyContinue)[0].Path
+    }
 
-$tcProperties = Get-TeamCityProperties # Teamcity has limited ENV: values but dumps the build configuration in a properties file.
+    $WeCanGit = ( (Test-Path $( Join-Path $Path .git )) -and (Get-Command $GitPath -ErrorAction SilentlyContinue) )
+    if($WeCanGit)
+    {
+        $IGParams = @{
+            Path = $Path
+            GitPath = $GitPath
+        }
+    }
+    $tcProperties = Get-TeamCityProperties # Teamcity has limited ENV: values but dumps the build configuration in a properties file.
 
-# Determine the build system:
+    # Determine the build system:
     $BuildSystem = switch ($Environment.Name)
     {
         'APPVEYOR_BUILD_FOLDER' { 'AppVeyor'; break }
         'GITLAB_CI'             { 'GitLab CI' ; break }
         'JENKINS_URL'           { 'Jenkins'; break }
         'BUILD_REPOSITORY_URI'  { 'VSTS'; break }
-        'TEAMCITY_VERSION'      { 'Teamcity' ; break }
+        'TEAMCITY_VERSION'      { 'Teamcity'; break }
+        'BAMBOO_BUILDKEY'       { 'Bamboo'; break }
+        'GOCD_SERVER_URL'       { 'GoCD'; break }
+        'TRAVIS'                { 'Travis CI'; break }
     }
     if(-not $BuildSystem)
     {
         $BuildSystem = 'Unknown'
     }
 
-# Find the build folder based on build system
+    # Find the build folder based on build system
     $BuildRoot = switch ($Environment.Name)
     {
-        'APPVEYOR_BUILD_FOLDER'         { (Get-Item -Path "ENV:$_").Value; break } # AppVeyor
-        'CI_PROJECT_DIR'                { (Get-Item -Path "ENV:$_").Value; break } # GitLab CI
-        'WORKSPACE'                     { (Get-Item -Path "ENV:$_").Value; break } # Jenkins Jenkins... seems generic.
-        'BUILD_REPOSITORY_LOCALPATH'    { (Get-Item -Path "ENV:$_").Value; break } # VSTS (Visual studio team services)
+        'APPVEYOR_BUILD_FOLDER'          { (Get-Item -Path "ENV:$_").Value; break } # AppVeyor
+        'CI_PROJECT_DIR'                 { (Get-Item -Path "ENV:$_").Value; break } # GitLab CI
+        'WORKSPACE'                      { (Get-Item -Path "ENV:$_").Value; break } # Jenkins Jenkins... seems generic.
+        'BUILD_REPOSITORY_LOCALPATH'     { (Get-Item -Path "ENV:$_").Value; break } # VSTS (Visual studio team services)
+        'BAMBOO_BUILD_WORKING_DIRECTORY' { (Get-Item -Path "ENV:$_").Value; break } # Bamboo
+        'TRAVIS_BUILD_DIR'               { (Get-Item -Path "ENV:$_").Value; break } # Travis CI
     }
     if(-not $BuildRoot)
     {
@@ -95,76 +125,100 @@ $tcProperties = Get-TeamCityProperties # Teamcity has limited ENV: values but du
         }
     }
 
-# Find the git branch
+    # Find the git branch
     $BuildBranch = switch ($Environment.Name)
     {
-        'APPVEYOR_REPO_BRANCH'      { (Get-Item -Path "ENV:$_").Value; break } # AppVeyor
-        'CI_BUILD_REF_NAME'         { (Get-Item -Path "ENV:$_").Value; break } # GitLab CI
-        'GIT_BRANCH'                { (Get-Item -Path "ENV:$_").Value; break } # Jenkins
-        'BUILD_SOURCEBRANCHNAME'    { (Get-Item -Path "ENV:$_").Value; break } # VSTS
+        'APPVEYOR_REPO_BRANCH'          { (Get-Item -Path "ENV:$_").Value; break } # AppVeyor
+        'CI_COMMIT_REF_NAME'            { (Get-Item -Path "ENV:$_").Value; break } # GitLab CI 9.0+
+        'CI_BUILD_REF_NAME'             { (Get-Item -Path "ENV:$_").Value; break } # GitLab CI 8.x
+        'GIT_BRANCH'                    { (Get-Item -Path "ENV:$_").Value; break } # Jenkins
+        'BUILD_SOURCEBRANCHNAME'        { (Get-Item -Path "ENV:$_").Value; break } # VSTS
+        'BAMBOO_REPOSITORY_GIT_BRANCH'  { (Get-Item -Path "ENV:$_").Value; break } # Bamboo
+        'TRAVIS_BRANCH'                 { (Get-Item -Path "ENV:$_").Value; break } # Travis CI
     }
     if(-not $BuildBranch)
     {
-        if($IsGitRepo)
+        if($WeCanGit)
         {
             # Using older than 1.6.3 in your build system? Yuck
             # Thanks to earl: http://stackoverflow.com/a/1418022/3067642
-            $BuildBranch = git rev-parse --abbrev-ref HEAD
+            $BuildBranch = Invoke-Git @IGParams -Arguments "rev-parse --abbrev-ref HEAD"
         }
     }
 
-# Find the git commit message
+    # Find the git commit message
     $CommitMessage = switch ($Environment.Name)
     {
         'APPVEYOR_REPO_COMMIT_MESSAGE' {
-            "$env:APPVEYOR_REPO_COMMIT_MESSAGE $env:APPVEYOR_REPO_COMMIT_MESSAGE_EXTENDED"
+            "$env:APPVEYOR_REPO_COMMIT_MESSAGE $env:APPVEYOR_REPO_COMMIT_MESSAGE_EXTENDED".TrimEnd()
             break
         }
-        'CI_BUILD_REF' {
-            if($IsGitRepo)
+        'CI_COMMIT_SHA' {
+            if($WeCanGit)
             {
-                git log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )
+                Invoke-Git @IGParams -Arguments "log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )"
                 break
-            } # Gitlab - thanks to mipadi http://stackoverflow.com/a/3357357/3067642
+            } # Gitlab 9.0+ - thanks to mipadi http://stackoverflow.com/a/3357357/3067642
+        }
+        'CI_BUILD_REF' {
+            if($WeCanGit)
+            {
+                Invoke-Git @IGParams -Arguments "log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )"
+                break
+            } # Gitlab 8.x - thanks to mipadi http://stackoverflow.com/a/3357357/3067642
         }
         'GIT_COMMIT' {
-            if($IsGitRepo)
+            if($WeCanGit)
             {
-                git log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )
+                Invoke-Git @IGParams -Arguments "log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )"
                 break
             } # Jenkins - thanks to mipadi http://stackoverflow.com/a/3357357/3067642
         }
         'BUILD_SOURCEVERSION' {
-            if($IsGitRepo)
+            if($WeCanGit)
             {
-                git log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )
+                Invoke-Git @IGParams -Arguments "log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )"
                 break
             } # VSTS (https://www.visualstudio.com/en-us/docs/build/define/variables#)
         }
         'BUILD_VCS_NUMBER' {
-            if($IsGitRepo)
+            if($WeCanGit)
             {
-                git log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )
+                Invoke-Git @IGParams -Arguments "log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )"
                 break
             } # Teamcity https://confluence.jetbrains.com/display/TCD10/Predefined+Build+Parameters
-        }        
+        }
+        'BAMBOO_REPOSITORY_REVISION_NUMBER' {
+            if($WeCanGit)
+            {
+                Invoke-Git @IGParams -Arguments "log --format=%B -n 1 $( (Get-Item -Path "ENV:$_").Value )"
+                break
+            } # Bamboo https://confluence.atlassian.com/bamboo/bamboo-variables-289277087.html
+        }
+        'TRAVIS_COMMIT_MESSAGE' {
+            "$env:TRAVIS_COMMIT_MESSAGE"
+            break
+        }
     }
     if(-not $CommitMessage)
     {
-        if($IsGitRepo)
+        if($WeCanGit)
         {
-            $CommitMessage = git log --format=%B -n 1
+            $CommitMessage = Invoke-Git @IGParams -Arguments "log --format=%B -n 1"
         }
     }
 
-# Build number
+    # Build number
     $BuildNumber = switch ($Environment.Name)
     {
         'APPVEYOR_BUILD_NUMBER' { (Get-Item -Path "ENV:$_").Value; break } # AppVeyor
-        'CI_BUILD_ID   '        { (Get-Item -Path "ENV:$_").Value; break } # GitLab CI - not perfect https://gitlab.com/gitlab-org/gitlab-ce/issues/3691
+        'CI_JOB_ID'             { (Get-Item -Path "ENV:$_").Value; break } # GitLab CI 9.0+ - not perfect https://gitlab.com/gitlab-org/gitlab-ce/issues/3691
+        'CI_BUILD_ID'           { (Get-Item -Path "ENV:$_").Value; break } # GitLab CI 8.x - not perfect https://gitlab.com/gitlab-org/gitlab-ce/issues/3691
         'BUILD_NUMBER'          { (Get-Item -Path "ENV:$_").Value; break } # Jenkins, Teamcity ... seems generic.
         'BUILD_BUILDNUMBER'     { (Get-Item -Path "ENV:$_").Value; break } # VSTS
-
+        'BAMBOO_BUILDNUMBER'    { (Get-Item -Path "ENV:$_").Value; break } # Bamboo
+        'GOCD_PIPELINE_COUNTER' { (Get-Item -Path "ENV:$_").Value; break } # GoCD
+        'TRAVIS_BUILD_NUMBER'   { (Get-Item -Path "ENV:$_").Value; break } # Travis CI
     }
     if(-not $BuildNumber)
     {

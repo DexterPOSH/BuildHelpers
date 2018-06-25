@@ -1,23 +1,35 @@
-function Set-ModuleFunctions {
+function Set-ModuleFormats {
     <#
     .SYNOPSIS
-        Set FunctionsToExport in a module manifest
+        EXPIRIMENTAL: Set FormatsToProcess
+        
+        [string]$FormatsPath in a module manifest
 
     .FUNCTIONALITY
         CI/CD
 
     .DESCRIPTION
-        Set FunctionsToExport in a module manifest
+        EXPIRIMENTAL: Set FormatsToProcess
+        
+        [string]$FormatsPath in a module manifest
 
     .PARAMETER Name
-        Path to module to inspect.  Defaults to ProjectPath\ProjectName via Get-BuildVariables
+        Name or path to module to inspect.  Defaults to ProjectPath\ProjectName via Get-BuildVariables
+
+    .PARAMETER FormatsToProcess
+        Array of .ps1xml files
+
+    .PARAMETER FormatsRelativePath
+        Path to the ps1xml files relatives to the root of the module (example: ".\Format")
 
     .NOTES
         Major thanks to Joel Bennett for the code behind working with the psd1
             Source: https://github.com/PoshCode/Configuration
 
     .EXAMPLE
-        Set-ModuleFunctions
+        Set-ModuleFormats -FormatsRelativePath '.\Format'
+
+        Update module manifiest FormatsToProcess parameters with all the .ps1xml present in the .\Format folder. 
 
     .LINK
         https://github.com/RamblingCookieMonster/BuildHelpers
@@ -31,7 +43,9 @@ function Set-ModuleFunctions {
         [Alias('Path')]
         [string]$Name,
 
-        [string[]]$FunctionsToExport
+        [string[]]$FormatsToProcess,
+
+        [string]$FormatsRelativePath
     )
     Process
     {
@@ -44,26 +58,26 @@ function Set-ModuleFunctions {
         $params = @{
             Force = $True
             Passthru = $True
-            Name = (Resolve-Path $Name).Path
+            Name = $Name
         }
 
-        # Create a runspace, add script to run
+        # Create a runspace
         $PowerShell = [Powershell]::Create()
+
+        # Add scriptblock to the runspace
         [void]$PowerShell.AddScript({
             Param ($Force, $Passthru, $Name)
             $module = Import-Module -Name $Name -PassThru:$Passthru -Force:$Force
-            $module | Where-Object {$_.Path -notin $module.Scripts}
+            $module | Where-Object Path -notin $module.Scripts
+
         }).AddParameters($Params)
 
-        #Consider moving this to a runspace or job to keep session clean
+        #Invoke the command
         $Module = $PowerShell.Invoke()
+
         if(-not $Module)
         {
             Throw "Could not find module '$Name'"
-        }
-        if(-not $FunctionsToExport)
-        {
-            $FunctionsToExport = @( $Module.ExportedFunctions.Keys )
         }
 
         $Parent = $Module.ModuleBase
@@ -74,7 +88,18 @@ function Set-ModuleFunctions {
             Throw "Could not find expected module manifest '$ModulePSD1Path'"
         }
 
-        Update-MetaData -Path $ModulePSD1Path -PropertyName FunctionsToExport -Value $FunctionsToExport
+        if(-not $FormatsToProcess)
+        {
+            $FormatPath = Join-Path -Path $Parent -ChildPath $FormatsRelativePath
+            $FormatList = Get-ChildItem -Path $FormatPath\*.ps1xml
+
+            $FormatsToProcess = @()
+            Foreach ($Item in $FormatList) {
+                $FormatsToProcess += Join-Path -Path $FormatsRelativePath -ChildPath $Item.Name
+            }
+        }
+
+        Update-MetaData -Path $ModulePSD1Path -PropertyName FormatsToProcess -Value $FormatsToProcess
 
         # Close down the runspace
         $PowerShell.Dispose()
